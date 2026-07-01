@@ -2,13 +2,18 @@
 """
 Export a Ximilar VLM dataset to a finetuning-ready conversation ("messages") JSON file.
 
-Supports both dataset modes (auto-detected from the dataset's `mode`):
+Supports all three dataset modes (auto-detected from the dataset's `mode`):
   * instruction  - single-turn: image(s) + input prompt + labeled variables -> one
                    user->assistant example (answer rendered from the result template).
   * agentic      - multi-turn conversation built from the sample's steps (user / assistant
                    thoughts / tool_call / tool_result / answer) plus the dataset's tools.
                    Thoughts are emitted natively per format (hf: <think>...</think> inline;
                    gpt: a separate `reasoning` field) unless --drop-thoughts is given.
+  * retrieval    - contrastive embedding data. Each sample is flattened into
+                   (anchor, positive, negative_0, ...) triplet rows for training multimodal
+                   sentence-transformers (HuggingFace CachedMultipleNegativesRankingLoss).
+                   Each role cell is a fused unit {"text", "image", "images"} (its text plus
+                   its attached image paths / detection-object crops). --format is ignored.
 
 Two output flavours are supported:
 
@@ -30,10 +35,17 @@ Auth via --api_token (or the XIMILAR_API_KEY env var):
     XIMILAR_API_KEY        (required unless --api_token is given)
     XIMILAR_WORKSPACE_ID   (optional, overridable with --workspace_id)
 
+Use --endpoint to target a non-production backend, e.g. --endpoint http://localhost:8000/api/
+
 RUN (from the transformers/ uv env):
     cd transformers && uv run python ../datasets/get_dataset.py \
         --dataset_id <ID> --type train --format hf \
         --output train.json --img_folder train_images [--img_as_base64]
+
+    # retrieval dataset -> triplet JSONL
+    cd transformers && uv run python ../datasets/get_dataset.py \
+        --dataset_id <RETRIEVAL_ID> --type all \
+        --output retrieval.jsonl --img_folder retrieval_images
 """
 
 import argparse
@@ -48,7 +60,6 @@ import requests
 from tqdm import tqdm
 
 from ximilar.client.vlm import VLMClient
-
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +121,11 @@ def get_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--api_token", help="Ximilar API token (defaults to $XIMILAR_API_KEY)")
     parser.add_argument("--workspace_id", help="Workspace id (defaults to $XIMILAR_WORKSPACE_ID)")
+    parser.add_argument(
+        "--endpoint",
+        help="API base URL (defaults to the client's production endpoint). "
+        "For a local backend use e.g. http://localhost:8000/api/",
+    )
     parser.add_argument("--limit", type=int, help="Only export the first N samples (for testing)")
     return parser
 
@@ -302,9 +318,7 @@ def parse_steps(steps, image_fn) -> list:
             elif step_type == "tool_call":
                 name = content.get("name") if isinstance(content, dict) else st.get("tool_name")
                 arguments = content.get("arguments") if isinstance(content, dict) else {}
-                assistant["tool_calls"].append(
-                    {"id": st.get("tool_call_id"), "name": name, "arguments": arguments}
-                )
+                assistant["tool_calls"].append({"id": st.get("tool_call_id"), "name": name, "arguments": arguments})
             else:  # answer / text
                 assistant["content"] = content_to_str(content)
         else:  # system step
@@ -380,9 +394,11 @@ def agentic_to_gpt(parsed, tools, system_prompt, drop_thoughts) -> dict:
                         "type": "function",
                         "function": {
                             "name": tc["name"],
-                            "arguments": tc["arguments"]
-                            if isinstance(tc["arguments"], str)
-                            else json.dumps(tc["arguments"], ensure_ascii=False),
+                            "arguments": (
+                                tc["arguments"]
+                                if isinstance(tc["arguments"], str)
+                                else json.dumps(tc["arguments"], ensure_ascii=False)
+                            ),
                         },
                     }
                     for tc in m["tool_calls"]
@@ -394,6 +410,61 @@ def agentic_to_gpt(parsed, tools, system_prompt, drop_thoughts) -> dict:
     if tools:
         record["tools"] = tools
     return record
+
+
+# --- Retrieval mode (contrastive anchor / positive / negative items) ---
+
+
+def _retrieval_cell(item, image_fn) -> dict:
+    """
+    Turn one retrieval item (a role: anchor/positive/negative) into a fused text+image cell.
+
+    Ximilar retrieval items fuse text with zero-or-more images / detection-object crops.
+    `image` is the first image ref (blog-style single-image cell); `images` keeps all refs.
+    """
+    refs = []
+    for img in sorted(item.get("item_images") or [], key=lambda x: x.get("order") or 0):
+        url = img.get("img_path")
+        if url:
+            refs.append(image_fn(url))
+    for obj in sorted(item.get("item_detection_objects") or [], key=lambda x: x.get("order") or 0):
+        url = obj.get("thumb_url") or obj.get("image_url")
+        if url:
+            refs.append(image_fn(url))
+    return {
+        "text": item.get("text") or "",
+        "image": refs[0] if refs else None,
+        "images": refs,
+    }
+
+
+def retrieval_to_triplets(items, image_fn) -> list:
+    """
+    Flatten one sample's retrieval items into (anchor, positive, negative_0, ...) rows.
+
+    Emits one row per (anchor x positive) pair; the sample's negatives are attached as
+    negative_0, negative_1, ... Returns [] for invalid samples (no anchor or no positive),
+    mirroring the backend's retrieval validity rule.
+    """
+    anchors = sorted((i for i in items if i.get("role") == "anchor"), key=lambda x: x.get("order") or 0)
+    positives = sorted((i for i in items if i.get("role") == "positive"), key=lambda x: x.get("order") or 0)
+    negatives = sorted((i for i in items if i.get("role") == "negative"), key=lambda x: x.get("order") or 0)
+    if not anchors or not positives:
+        return []
+
+    # Build each item's cell exactly once (image downloads/base64 are not repeated).
+    anchor_cells = [_retrieval_cell(a, image_fn) for a in anchors]
+    positive_cells = [_retrieval_cell(p, image_fn) for p in positives]
+    negative_cells = [_retrieval_cell(n, image_fn) for n in negatives]
+
+    rows = []
+    for anchor_cell in anchor_cells:
+        for positive_cell in positive_cells:
+            row = {"anchor": anchor_cell, "positive": positive_cell}
+            for idx, neg_cell in enumerate(negative_cells):
+                row[f"negative_{idx}"] = neg_cell
+            rows.append(row)
+    return rows
 
 
 def write_output(path, records):
@@ -422,7 +493,10 @@ def main() -> None:
     if args.img_folder and not args.img_as_base64:
         os.makedirs(args.img_folder, exist_ok=True)
 
-    client = VLMClient(api_key, workspace=workspace)
+    client_kwargs = {"workspace": workspace}
+    if args.endpoint:
+        client_kwargs["endpoint"] = args.endpoint
+    client = VLMClient(api_key, **client_kwargs)
     client.max_image_size = 0
 
     dataset = client.get_dataset(args.dataset_id)
@@ -434,6 +508,7 @@ def main() -> None:
     ds_result_template = resolve_prompt(dataset, "result_template")
     system_prompt = None if args.no_system_prompt else resolve_prompt(dataset, "system_prompt")
     is_agentic = dataset.get("mode") == "agentic"
+    is_retrieval = dataset.get("mode") == "retrieval"
 
     tools = None
     if is_agentic:
@@ -465,7 +540,18 @@ def main() -> None:
     for item in tqdm(samples, desc=f"{args.type}:{args.format}"):
         sample_id = item.get("id")
         try:
-            if is_agentic:
+            if is_retrieval:
+                ritems, ristatus = client.get_retrieval_items(sample_id)
+                rows = retrieval_to_triplets(ritems or [], image_fn)
+                if not rows:
+                    tqdm.write(f"[skip] sample {sample_id}: no anchor/positive pair")
+                    skipped += 1
+                    continue
+                for row in rows:
+                    row["sample_id"] = sample_id
+                    row["sample_name"] = item.get("name")
+                records.extend(rows)
+            elif is_agentic:
                 steps, sstatus = client.get_sample_steps(sample_id)
                 if not steps:
                     tqdm.write(f"[skip] sample {sample_id}: no steps")

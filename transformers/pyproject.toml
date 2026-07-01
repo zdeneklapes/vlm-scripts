@@ -19,4 +19,4 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-ximilar-client = { path = "../../../ximilar-client", editable = true }
+ximilar-client = { path = "../../ximilar-client", editable = true }

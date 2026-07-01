@@ -1359,13 +1359,13 @@ requires-dist = [
     { name = "tqdm", specifier = ">=4.66" },
     { name = "transformers", marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'", specifier = ">=5.1.0" },
     { name = "transformers", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'", specifier = "==5.0.0" },
-    { name = "ximilar-client", editable = "../../../ximilar-client" },
+    { name = "ximilar-client", editable = "../../ximilar-client" },
 ]
 
 [[package]]
 name = "ximilar-client"
 version = "1.39.0"
-source = { editable = "../../../ximilar-client" }
+source = { editable = "../../ximilar-client" }
 dependencies = [
     { name = "pytest" },
     { name = "requests" },
