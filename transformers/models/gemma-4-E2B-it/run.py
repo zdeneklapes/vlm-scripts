@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Run inference with LiquidAI/LFM2.5-VL-1.6B (no tools).
+"""Run inference with google/gemma-4-E2B-it (no tools).
 
-The fine-tuned checkpoint may emit thinking (<think>...</think>) or
-tool-call markers alongside its answer, so the output is parsed with the
-same response schema run_agentic.py uses: markers become Thinking /
+The fine-tuned checkpoint may emit thinking (<|channel>thought...<channel|>)
+or tool-call markers alongside its answer, so the output is parsed with
+the same response schema run_agentic.py uses: markers become Thinking /
 Tool calls / Answer sections when present; a plain response is just the
 Answer.
 
@@ -14,39 +14,21 @@ Edit the constants below to change the prompt, images, or generation
 settings. The model is downloaded automatically on first run:
 
     export MODEL_DOWNLOAD_DIRECTORY=./stored
-    export MODEL_URL_HF_LFM2_5_1_6B='https://...'
-    uv run models/LFM2.5-VL-1.6B/run.py
+    export MODEL_URL_HF_GEMMA_4_E2B_IT='https://...'
+    uv run models/gemma-4-E2B-it/run.py
 
 The download URL comes from your model's details page at
 https://app.ximilar.com/platform/vlm/tasks/ (valid for 24 hours).
 """
 
 import logging
-import os
-import platform
 import sys
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[2]  # the transformers/ directory
 sys.path.insert(0, str(ROOT_DIR))
 
-
-def _require_lfm25_mps_fallback() -> None:
-    """LFM2.5-VL uses ops MPS doesn't implement; the CPU-fallback env var must be set before torch loads."""
-    if (
-            platform.system() == "Darwin"
-            and platform.machine() == "arm64"
-            and os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK") != "1"
-    ):
-        print(
-            "error: LiquidAI/LFM2.5-VL on Apple Silicon requires PYTORCH_ENABLE_MPS_FALLBACK=1 "
-            "before Python starts. Re-run with `PYTORCH_ENABLE_MPS_FALLBACK=1 uv run ...`.",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
-
-
-_require_lfm25_mps_fallback()
+from transformers import AutoModelForMultimodalLM
 
 from agentic import parse_agentic, print_parsed, run_agentic_inference
 from base import (
@@ -60,15 +42,13 @@ from base import (
 )
 
 # --- Model -------------------------------------------------------------------
-MODEL_ID = "LiquidAI/LFM2.5-VL-1.6B"  # HuggingFace ID -- used as base model for LoRA adapters
-MODEL_URL_ENV = "MODEL_URL_HF_LFM2_5_1_6B"  # env var holding the model download URL
-FAMILY = "lfm2.5"  # wire-format family: qwen3vl | lfm2.5 | gemma4
+MODEL_ID = "google/gemma-4-E2B-it"  # HuggingFace ID -- used as base model for LoRA adapters
+MODEL_URL_ENV = "MODEL_URL_HF_GEMMA_4_E2B_IT"  # env var holding the model download URL
+FAMILY = "gemma4"  # wire-format family: qwen3vl | lfm2.5 | gemma4
 
-# Liquid models use image tiling with token budget control
+# Gemma requires left-side padding for correct attention masking
 PROCESSOR_KWARGS = {
-    "min_image_tokens": 64,
-    "max_image_tokens": 256,
-    "do_image_splitting": True,
+    "padding_side": "left",
 }
 
 # --- Inference settings (edit these) ------------------------------------------
@@ -90,7 +70,7 @@ def main():
     device = resolve_device("auto")
     dtype = resolve_dtype(device, "auto")
 
-    model, processor = load_model(MODEL_ID, model_path, device, dtype, processor_kwargs=PROCESSOR_KWARGS)
+    model, processor = load_model(MODEL_ID, model_path, device, dtype, processor_kwargs=PROCESSOR_KWARGS, auto_model_class=AutoModelForMultimodalLM)
     images = load_images([str(ROOT_DIR / p) for p in IMAGES], max_size=RESIZE)
     messages = build_messages(images, USER_PROMPT, SYSTEM_PROMPT)
 

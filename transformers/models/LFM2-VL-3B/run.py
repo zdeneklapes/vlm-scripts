@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Run inference with Qwen/Qwen3-VL-2B-Instruct.
+"""Run inference with LiquidAI/LFM2-VL-3B.
 
 Edit the constants below to change the prompt, images, or generation
 settings. The model is downloaded automatically on first run: set
-MODEL_URL_HF_QWEN3_VL_2B_INSTRUCT to the download URL from your model's details
+MODEL_URL_HF_LFM2_VL_3B to the download URL from your model's details
 page at https://app.ximilar.com/platform/vlm/tasks/ and run:
 
     export MODEL_DOWNLOAD_DIRECTORY=./stored
-    export MODEL_URL_HF_QWEN3_VL_2B_INSTRUCT='https://...'
-    uv run models/Qwen3-VL-2B-Instruct/run.py
+    export MODEL_URL_HF_LFM2_VL_3B='https://...'
+    uv run models/LFM2-VL-3B/run.py
 """
 
 import logging
@@ -30,18 +30,22 @@ from base import (
 )
 
 # --- Model -------------------------------------------------------------------
-MODEL_ID = "Qwen/Qwen3-VL-2B-Instruct"  # HuggingFace ID -- used as base model for LoRA adapters
-MODEL_URL_ENV = "MODEL_URL_HF_QWEN3_VL_2B_INSTRUCT"  # env var holding the model download URL
+MODEL_ID = "LiquidAI/LFM2-VL-3B"  # HuggingFace ID -- used as base model for LoRA adapters
+MODEL_URL_ENV = "MODEL_URL_HF_LFM2_VL_3B"  # env var holding the model download URL
 
-# Qwen3-VL uses dynamic resolution -- no special processor kwargs needed
-PROCESSOR_KWARGS = {}
+# Liquid models use image tiling with token budget control
+PROCESSOR_KWARGS = {
+    "min_image_tokens": 64,
+    "max_image_tokens": 256,
+    "do_image_splitting": True,
+}
 
 # --- Inference settings (edit these) ------------------------------------------
 IMAGES = ["media/photo.jpg"]  # local image paths, relative to the transformers/ directory
 USER_PROMPT = "Describe the product in the image."
 SYSTEM_PROMPT = None
 MAX_TOKENS = 256
-TEMPERATURE = 0.7  # 0.0 = greedy
+TEMPERATURE = 0.0  # 0.0 = greedy
 RESIZE = None  # max image dimension in px, None = keep original size
 DEBUG = False
 

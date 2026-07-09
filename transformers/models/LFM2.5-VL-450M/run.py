@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run inference with LiquidAI/LFM2.5-VL-1.6B (no tools).
+"""Run inference with LiquidAI/LFM2.5-VL-450M (no tools).
 
 The fine-tuned checkpoint may emit thinking (<think>...</think>) or
 tool-call markers alongside its answer, so the output is parsed with the
@@ -14,8 +14,8 @@ Edit the constants below to change the prompt, images, or generation
 settings. The model is downloaded automatically on first run:
 
     export MODEL_DOWNLOAD_DIRECTORY=./stored
-    export MODEL_URL_HF_LFM2_5_1_6B='https://...'
-    uv run models/LFM2.5-VL-1.6B/run.py
+    export MODEL_URL_HF_LFM2_5_450M='https://...'
+    uv run models/LFM2.5-VL-450M/run.py
 
 The download URL comes from your model's details page at
 https://app.ximilar.com/platform/vlm/tasks/ (valid for 24 hours).
@@ -60,8 +60,8 @@ from base import (
 )
 
 # --- Model -------------------------------------------------------------------
-MODEL_ID = "LiquidAI/LFM2.5-VL-1.6B"  # HuggingFace ID -- used as base model for LoRA adapters
-MODEL_URL_ENV = "MODEL_URL_HF_LFM2_5_1_6B"  # env var holding the model download URL
+MODEL_ID = "LiquidAI/LFM2.5-VL-450M"  # HuggingFace ID -- used as base model for LoRA adapters
+MODEL_URL_ENV = "MODEL_URL_HF_LFM2_5_450M"  # env var holding the model download URL
 FAMILY = "lfm2.5"  # wire-format family: qwen3vl | lfm2.5 | gemma4
 
 # Liquid models use image tiling with token budget control
