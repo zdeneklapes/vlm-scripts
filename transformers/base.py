@@ -17,6 +17,26 @@ from typing import List, Optional, Tuple
 import torch
 from PIL import Image
 
+
+def _patch_torch_autocast_compat(torch_module=None) -> bool:
+    """Make older torch builds accept the newer transformers autocast call style."""
+    torch_module = torch if torch_module is None else torch_module
+
+    try:
+        torch_module.is_autocast_enabled("cpu")
+        return False
+    except TypeError:
+        original = torch_module.is_autocast_enabled
+
+        def is_autocast_enabled(device_type=None):
+            return original()
+
+        torch_module.is_autocast_enabled = is_autocast_enabled
+        return True
+
+
+_patch_torch_autocast_compat()
+
 from transformers import AutoModelForImageTextToText, AutoProcessor
 from transformers.image_utils import load_image
 
